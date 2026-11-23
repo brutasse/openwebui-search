@@ -58,6 +58,20 @@ module.valves = module.Valves(**{'BOGUS_KEY': 1})  # unknown keys must be ignore
 assert module.valves.SELECTION == 'random'
 print('Valves(**saved) OK (defaults, overrides, unknown keys ignored)')
 
+# --- Valves.schema() exactly as GET /tools/id/{id}/valves/spec calls it ---
+schema = module.Valves.schema()
+assert schema['type'] == 'object'
+assert set(schema['properties']) == {
+    'SELECTION', 'NUM_RESULTS', 'TIMEOUT_SECONDS', 'MAX_CONTENT_LENGTH', 'USER_AGENT',
+    'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY', 'TINYFISH_API_KEY',
+}
+assert schema['properties']['SELECTION']['input']['type'] == 'select'
+assert all(
+    schema['properties'][k]['input'] == {'type': 'password'}
+    for k in ('EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY', 'TINYFISH_API_KEY')
+)
+print('Valves.schema() OK:', len(schema['properties']), 'properties (select + password inputs)')
+
 # --- spec derivation (utils/tools.py: get_functions_from_tool + convert_*) ---
 functions = [
     getattr(tool, func)

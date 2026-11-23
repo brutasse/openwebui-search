@@ -20,6 +20,7 @@ from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, NavigableString
+from pydantic import BaseModel, Field
 
 MAX_RESPONSE_BYTES = 256 * 1024  # hard cap on provider responses (OpenCode: 256KB)
 MAX_REDIRECTS = 5
@@ -30,31 +31,58 @@ DEFAULT_COOLDOWN_SECONDS = 60.0
 MAX_COOLDOWN_SECONDS = 900.0
 
 
-class Valves:
+class Valves(BaseModel):
     # Provider selection: 'random' (default), a provider id ('exa', 'tavily',
     # 'firecrawl', 'parallel', 'tinyfish'), or 'disabled'.
-    SELECTION = 'random'
+    SELECTION: str = Field(
+        default='random',
+        description="Provider: 'random' (sticky selection with failover), a provider id, or 'disabled'.",
+        json_schema_extra={
+            'input': {
+                'type': 'select',
+                'options': ['random', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish', 'disabled'],
+            }
+        },
+    )
     # Results per provider call (OpenCode uses 8).
-    NUM_RESULTS = 8
+    NUM_RESULTS: int = Field(default=8, description='Results per provider call.')
     # Seconds per provider request.
-    TIMEOUT_SECONDS = 25
+    TIMEOUT_SECONDS: int = Field(default=25, description='Seconds per provider request.')
     # fetch_url: truncate extracted text beyond this many characters (0 = no limit).
-    MAX_CONTENT_LENGTH = 15000
+    MAX_CONTENT_LENGTH: int = Field(
+        default=15000,
+        description='fetch_url: truncate extracted text beyond this many characters (0 = no limit).',
+    )
     # User-Agent header for all requests.
-    USER_AGENT = DEFAULT_USER_AGENT
+    USER_AGENT: str = Field(default=DEFAULT_USER_AGENT, description='User-Agent header for all requests.')
     # Provider API keys. All optional: every provider works keyless (anonymous),
-    # exactly like OpenCode. Keys here take precedence over environment variables.
-    EXA_API_KEY = ''
-    TAVILY_API_KEY = ''
-    FIRECRAWL_API_KEY = ''
-    PARALLEL_API_KEY = ''
-    TINYFISH_API_KEY = ''
-
-    def __init__(self, **kwargs):
-        # The app loads valves as Valves(**saved); unknown keys are ignored.
-        for key, value in kwargs.items():
-            if key in self.__class__.__dict__ and not key.startswith('_'):
-                setattr(self, key, value)
+    # exactly like OpenCode. A key here takes precedence over the environment
+    # variable of the same name.
+    EXA_API_KEY: str = Field(
+        default='',
+        description='Exa API key. Empty = keyless (anonymous) request.',
+        json_schema_extra={'input': {'type': 'password'}},
+    )
+    TAVILY_API_KEY: str = Field(
+        default='',
+        description='Tavily API key. Empty = keyless (anonymous) request.',
+        json_schema_extra={'input': {'type': 'password'}},
+    )
+    FIRECRAWL_API_KEY: str = Field(
+        default='',
+        description='Firecrawl API key. Empty = keyless (anonymous) request.',
+        json_schema_extra={'input': {'type': 'password'}},
+    )
+    PARALLEL_API_KEY: str = Field(
+        default='',
+        description='Parallel API key. Empty = keyless (anonymous) request.',
+        json_schema_extra={'input': {'type': 'password'}},
+    )
+    TINYFISH_API_KEY: str = Field(
+        default='',
+        description='TinyFish API key. Empty = keyless (anonymous) request.',
+        json_schema_extra={'input': {'type': 'password'}},
+    )
 
 
 # Set by the Open WebUI app at tool load time (module.Valves(**saved)).

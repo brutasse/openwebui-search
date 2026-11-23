@@ -309,3 +309,49 @@ def test_docstring_carries_current_year():
     doc = websearch.Tools.web_search.__doc__
     assert str(datetime.now().year) in doc
     assert ':param query:' in doc
+
+
+# ---------------------------------------------------------------------------
+# Valves schema (the admin UI renders Valves.schema(), exactly as
+# GET /api/v1/tools/id/{id}/valves/spec calls it)
+# ---------------------------------------------------------------------------
+
+
+def test_valves_schema_covers_all_valves_with_types_and_defaults():
+    schema = websearch.Valves.schema()
+    props = schema['properties']
+    assert set(props) == {
+        'SELECTION', 'NUM_RESULTS', 'TIMEOUT_SECONDS', 'MAX_CONTENT_LENGTH', 'USER_AGENT',
+        'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY', 'TINYFISH_API_KEY',
+    }
+    assert props['SELECTION']['type'] == 'string' and props['SELECTION']['default'] == 'random'
+    assert props['NUM_RESULTS']['type'] == 'integer' and props['NUM_RESULTS']['default'] == 8
+    assert props['TIMEOUT_SECONDS']['default'] == 25
+    assert props['MAX_CONTENT_LENGTH']['default'] == 15000
+    assert props['USER_AGENT']['default'] == websearch.DEFAULT_USER_AGENT
+    # no required fields: every valve has a default, so an empty stored
+    # valves dict yields a fully working tool
+    assert not schema.get('required')
+
+
+def test_valves_schema_ui_conventions():
+    props = websearch.Valves.schema()['properties']
+    # SELECTION renders as a dropdown with the provider choices
+    assert props['SELECTION']['input'] == {
+        'type': 'select',
+        'options': ['random', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish', 'disabled'],
+    }
+    # API keys render as sensitive inputs
+    for key in ('EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY', 'TINYFISH_API_KEY'):
+        assert props[key]['input'] == {'type': 'password'}
+
+
+def test_valves_construction_defaults_and_unknown_keys():
+    v = websearch.Valves()
+    assert v.SELECTION == 'random' and v.NUM_RESULTS == 8
+    # The app loads valves as Valves(**saved); unknown stored keys must be
+    # ignored (pydantic v2 extra='ignore' is the default)
+    v2 = websearch.Valves(**{'BOGUS_KEY': 1})
+    assert v2.SELECTION == 'random' and v2.NUM_RESULTS == 8
+    v3 = websearch.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': 3})
+    assert v3.SELECTION == 'exa' and v3.NUM_RESULTS == 3

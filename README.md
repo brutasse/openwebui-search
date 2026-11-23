@@ -27,7 +27,7 @@ The plugin replicates the OpenCode `websearch` + `webfetch` tool pair:
 
 | File | Purpose |
 |---|---|
-| `plugins/websearch.py` | The tool plugin. Paste into Admin → Tools → New Tool, or provision via the script below. |
+| `plugins/websearch.py` | The tool plugin. Paste into Workspace → Tools → New Tool, or provision via the script below. |
 | `provision.py` | Idempotent provisioner: creates/updates the tool in the Open WebUI database, sets access grants, default valves, and attaches the tool to workspace models. |
 | `tests/` | Unit tests (mocked HTTP; no live provider calls). |
 | `scripts/check_owui_compat.py` | Simulates Open WebUI's exact tool-load path (frontmatter, `Valves(**saved)`, spec derivation) against the plugin. |
@@ -61,7 +61,7 @@ with `--model-id`.
 Get an admin JWT instead of a password with the browser: DevTools →
 Network → any API call → copy the `Authorization` header value → `--token`.
 
-## Configuration (tool Valves, Admin → Tools → WebSearch)
+## Configuration (tool Valves, Workspace → Tools → WebSearch)
 
 | Valve | Default | Meaning |
 |---|---|---|
