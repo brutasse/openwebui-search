@@ -11,6 +11,9 @@ Usage:
         --grant-group <group-id> \
         --model-id <model-id>
 
+Access can also be granted to every non-admin user at once with
+--grant-all-non-admins (discovered via the admin user list).
+
 Auth is via --token (JWT from the browser, or "Sign In" response) or
 --email/--password (signed in automatically).
 """
@@ -147,13 +150,30 @@ class Provisioner:
         )
         self.actions.append(f'set valves: {", ".join(p.split("=")[0] for p in valve_pairs)}')
 
+    async def _list_users(self):
+        users = []
+        page = 1
+        while True:
+            resp = _check(
+                await self.client.get('/api/v1/users/', params={'page': page}),
+                'list users',
+            )
+            data = resp.json()
+            batch = data.get('users') or []
+            users.extend(batch)
+            if len(users) >= (data.get('total') or 0) or not batch:
+                return users
+            page += 1
+
     async def _attach_to_models(self, model_ids):
         for model_id in model_ids:
-            resp = _check(
-                await self.client.get('/api/v1/models/model', params={'id': model_id}),
-                f'get model {model_id}',
-            )
-            model = resp.json()
+            resp = await self.client.get('/api/v1/models/model', params={'id': model_id})
+            if resp.status_code == 404:
+                # A renamed or removed model must not block the rest of
+                # the provisioning (tool, grants, valves).
+                self.actions.append(f'WARNING: model {model_id} not found; skipped')
+                continue
+            model = _check(resp, f'get model {model_id}').json()
             meta = dict(model.get('meta') or {})
             tool_ids = meta.get('toolIds') or []
             if self.tool_id in tool_ids:
@@ -173,12 +193,21 @@ class Provisioner:
             )
             self.actions.append(f'attached {self.tool_id} to model {model_id}')
 
-    async def run(self, grant_groups, grant_users, model_ids, valve_pairs):
+    async def run(self, grant_groups, grant_users, model_ids, valve_pairs,
+                  grant_all_non_admins=False):
         grants = []
         for group_id in grant_groups:
             grants.append({'principal_type': 'group', 'principal_id': group_id, 'permission': 'read'})
         for user_id in grant_users:
             grants.append({'principal_type': 'user', 'principal_id': user_id, 'permission': 'read'})
+        if grant_all_non_admins:
+            # Admins use tools without a grant; everyone else gets one.
+            for user in await self._list_users():
+                if user.get('role') == 'admin' or not user.get('id'):
+                    continue
+                if any(g['principal_type'] == 'user' and g['principal_id'] == user['id'] for g in grants):
+                    continue
+                grants.append({'principal_type': 'user', 'principal_id': user['id'], 'permission': 'read'})
 
         tool = await self._upsert_tool(grants)
         # Refresh grants from the live record (create response may not echo them).
@@ -208,6 +237,8 @@ def parse_args(argv=None):
                         help='grant read access to a group (repeatable)')
     parser.add_argument('--grant-user', action='append', default=[], metavar='USER_ID',
                         help='grant read access to a user (repeatable)')
+    parser.add_argument('--grant-all-non-admins', action='store_true',
+                        help="grant read access to every user whose role is not 'admin'")
     parser.add_argument('--model-id', action='append', default=[], metavar='MODEL_ID',
                         help='attach the tool to a workspace model (repeatable)')
     parser.add_argument('--valve', action='append', default=[], metavar='KEY=VALUE',
@@ -240,7 +271,8 @@ async def main(argv=None) -> int:
         if not args.token:
             await provisioner._signin(args.email, args.password)
         try:
-            await provisioner.run(args.grant_group, args.grant_user, args.model_id, args.valve)
+            await provisioner.run(args.grant_group, args.grant_user, args.model_id, args.valve,
+                                  grant_all_non_admins=args.grant_all_non_admins)
         except (ProvisionError, httpx.HTTPError) as e:
             print(f'error: {e}', file=sys.stderr)
             return 1

@@ -62,6 +62,9 @@ def make_env(db):
             body = request_json
             db['models'][body['id']] = body
             return httpx.Response(200, json=body)
+        if request.method == 'GET' and path == '/api/v1/users/':
+            users = db.get('users') or []
+            return httpx.Response(200, json={'users': users, 'total': len(users)})
         if request.method == 'POST' and path == '/api/v1/auths/signin':
             return httpx.Response(200, json={'token': 'jwt-123'})
         return httpx.Response(404, json={'detail': f'unhandled {request.method} {path}'})
@@ -70,11 +73,12 @@ def make_env(db):
     return client, calls
 
 
-def run(client, grant_groups=(), grant_users=(), model_ids=(), valves=()):
+def run(client, grant_groups=(), grant_users=(), model_ids=(), valves=(), grant_all_non_admins=False):
     provisioner = provision.Provisioner(client, PLUGIN_CONTENT)
     import asyncio
 
-    asyncio.run(provisioner.run(list(grant_groups), list(grant_users), list(model_ids), list(valves)))
+    asyncio.run(provisioner.run(list(grant_groups), list(grant_users), list(model_ids), list(valves),
+                                grant_all_non_admins=grant_all_non_admins))
     return provisioner
 
 
@@ -181,6 +185,56 @@ def test_skips_model_when_already_attached():
     actions = run(client, model_ids=['m1']).actions
     assert not [r for r in calls if r.url.path == '/api/v1/models/model/update']
     assert any('already has' in a for a in actions)
+
+
+def test_model_not_found_is_warning_not_failure():
+    db = {'tools': [], 'exports': [], 'models': {}}  # no models at all
+    client, calls = make_env(db)
+    actions = run(client, model_ids=['missing-model']).actions
+    assert not [r for r in calls if r.url.path == '/api/v1/models/model/update']
+    assert any('not found' in a and 'missing-model' in a for a in actions)
+    # the tool itself was still created
+    assert [r for r in calls if r.url.path == '/api/v1/tools/create']
+
+
+def test_grant_all_non_admins():
+    db = {
+        'tools': [],
+        'exports': [],
+        'models': {},
+        'users': [
+            {'id': 'admin-1', 'name': 'Bruno', 'email': 'bruno@example.com', 'role': 'admin'},
+            {'id': 'user-2', 'name': 'Lucie', 'email': 'lucie@example.com', 'role': 'pending'},
+            {'id': 'user-3', 'name': 'Visitor', 'email': 'v@example.com', 'role': 'user'},
+        ],
+    }
+    client, calls = make_env(db)
+    run(client, grant_all_non_admins=True)
+    create = next(r for r in calls if r.url.path == '/api/v1/tools/create')
+    granted = req_json(create)['access_grants']
+    assert {'principal_type': 'user', 'principal_id': 'user-2', 'permission': 'read'} in granted
+    assert {'principal_type': 'user', 'principal_id': 'user-3', 'permission': 'read'} in granted
+    assert not any(g['principal_id'] == 'admin-1' for g in granted)  # admin excluded
+    assert [r for r in calls if r.url.path == '/api/v1/users/']
+
+
+def test_grant_all_non_admins_combines_with_explicit_grants():
+    db = {
+        'tools': [],
+        'exports': [],
+        'models': {},
+        'users': [
+            {'id': 'admin-1', 'name': 'Bruno', 'email': 'bruno@example.com', 'role': 'admin'},
+            {'id': 'user-2', 'name': 'Lucie', 'email': 'lucie@example.com', 'role': 'user'},
+        ],
+    }
+    client, calls = make_env(db)
+    run(client, grant_users=['user-2'], grant_all_non_admins=True)
+    create = next(r for r in calls if r.url.path == '/api/v1/tools/create')
+    granted = req_json(create)['access_grants']
+    # explicit + discovered must dedupe on the same user
+    assert sum(1 for g in granted if g['principal_id'] == 'user-2') == 1
+    assert not any(g['principal_id'] == 'admin-1' for g in granted)
 
 
 def test_valves_merge_with_existing():
