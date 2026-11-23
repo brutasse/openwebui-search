@@ -21,11 +21,9 @@ provision = _load('owui_provision', ROOT / 'provision.py')
 
 @pytest.fixture(autouse=True)
 def clean_plugin_state():
-    websearch.valves = None
     websearch._state.update({'sticky': None, 'cooldowns': {}})
     original_client = websearch.httpx.AsyncClient
     yield
-    websearch.valves = None
     websearch._state.update({'sticky': None, 'cooldowns': {}})
     websearch.httpx.AsyncClient = original_client
 
@@ -52,5 +50,9 @@ def fake_dns(monkeypatch):
     monkeypatch.setattr(ws.socket, 'getaddrinfo', fake_getaddrinfo)
 
 
-def set_valves(**kwargs):
-    websearch.valves = websearch.Valves(**kwargs)
+def load_tool(**valves):
+    """Load the tool exactly as Open WebUI does (utils/tools.py): a Tools
+    instance, then the saved valves applied to it."""
+    tool = websearch.Tools()
+    tool.valves = tool.Valves(**valves)
+    return tool

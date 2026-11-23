@@ -50,16 +50,19 @@ exec(content, module.__dict__)
 assert hasattr(module, 'Tools'), 'No Tools class found in the module'
 tool = module.Tools()
 
-# --- Valves(**saved) exactly as get_tools does it ---
-module.valves = module.Valves()
-module.valves = module.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': 5})
-assert module.valves.SELECTION == 'exa' and module.valves.NUM_RESULTS == 5
-module.valves = module.Valves(**{'BOGUS_KEY': 1})  # unknown keys must be ignored
-assert module.valves.SELECTION == 'random'
+# --- Valves(**saved) exactly as utils/tools.py does it (on the Tools
+# instance, which is what v0.13.4 caches) ---
+assert hasattr(tool, 'valves') and hasattr(tool, 'Valves'), \
+    'Valves/valves must be reachable off the Tools instance'
+tool.valves = tool.Valves()
+tool.valves = tool.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': 5})
+assert tool.valves.SELECTION == 'exa' and tool.valves.NUM_RESULTS == 5
+tool.valves = tool.Valves(**{'BOGUS_KEY': 1})  # unknown keys must be ignored
+assert tool.valves.SELECTION == 'random'
 print('Valves(**saved) OK (defaults, overrides, unknown keys ignored)')
 
 # --- Valves.schema() exactly as GET /tools/id/{id}/valves/spec calls it ---
-schema = module.Valves.schema()
+schema = tool.Valves.schema()
 assert schema['type'] == 'object'
 assert set(schema['properties']) == {
     'SELECTION', 'NUM_RESULTS', 'TIMEOUT_SECONDS', 'MAX_CONTENT_LENGTH', 'USER_AGENT',

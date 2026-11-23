@@ -31,62 +31,7 @@ DEFAULT_COOLDOWN_SECONDS = 60.0
 MAX_COOLDOWN_SECONDS = 900.0
 
 
-class Valves(BaseModel):
-    # Provider selection: 'random' (default), a provider id ('exa', 'tavily',
-    # 'firecrawl', 'parallel', 'tinyfish'), or 'disabled'.
-    SELECTION: str = Field(
-        default='random',
-        description="Provider: 'random' (sticky selection with failover), a provider id, or 'disabled'.",
-        json_schema_extra={
-            'input': {
-                'type': 'select',
-                'options': ['random', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish', 'disabled'],
-            }
-        },
-    )
-    # Results per provider call (OpenCode uses 8).
-    NUM_RESULTS: int = Field(default=8, description='Results per provider call.')
-    # Seconds per provider request.
-    TIMEOUT_SECONDS: int = Field(default=25, description='Seconds per provider request.')
-    # fetch_url: truncate extracted text beyond this many characters (0 = no limit).
-    MAX_CONTENT_LENGTH: int = Field(
-        default=15000,
-        description='fetch_url: truncate extracted text beyond this many characters (0 = no limit).',
-    )
-    # User-Agent header for all requests.
-    USER_AGENT: str = Field(default=DEFAULT_USER_AGENT, description='User-Agent header for all requests.')
-    # Provider API keys. All optional: every provider works keyless (anonymous),
-    # exactly like OpenCode. A key here takes precedence over the environment
-    # variable of the same name.
-    EXA_API_KEY: str = Field(
-        default='',
-        description='Exa API key. Empty = keyless (anonymous) request.',
-        json_schema_extra={'input': {'type': 'password'}},
-    )
-    TAVILY_API_KEY: str = Field(
-        default='',
-        description='Tavily API key. Empty = keyless (anonymous) request.',
-        json_schema_extra={'input': {'type': 'password'}},
-    )
-    FIRECRAWL_API_KEY: str = Field(
-        default='',
-        description='Firecrawl API key. Empty = keyless (anonymous) request.',
-        json_schema_extra={'input': {'type': 'password'}},
-    )
-    PARALLEL_API_KEY: str = Field(
-        default='',
-        description='Parallel API key. Empty = keyless (anonymous) request.',
-        json_schema_extra={'input': {'type': 'password'}},
-    )
-    TINYFISH_API_KEY: str = Field(
-        default='',
-        description='TinyFish API key. Empty = keyless (anonymous) request.',
-        json_schema_extra={'input': {'type': 'password'}},
-    )
 
-
-# Set by the Open WebUI app at tool load time (module.Valves(**saved)).
-valves = None
 
 # Process-scoped state, mirroring OpenCode's in-memory session affinity and
 # 429 cooldowns. Resets on container restart, same as OpenCode's cooldowns.
@@ -96,17 +41,15 @@ _state = {
 }
 
 
-def _valve(name, default=None):
-    if valves is None:
-        return default
-    value = getattr(valves, name, None)
+def _valve(valves, name, default=None):
+    value = getattr(valves, name, None) if valves is not None else None
     if value in (None, ''):
         return default
     return value
 
 
-def _api_key(env_var):
-    return _valve(env_var) or os.environ.get(env_var, '') or None
+def _api_key(valves, env_var):
+    return _valve(valves, env_var) or os.environ.get(env_var, '') or None
 
 
 class ProviderError(Exception):
@@ -431,8 +374,8 @@ PROVIDERS = {
 # ---------------------------------------------------------------------------
 
 
-def _selection():
-    return (_valve('SELECTION', 'random') or 'random').strip().lower()
+def _selection(valves):
+    return (_valve(valves, 'SELECTION', 'random') or 'random').strip().lower()
 
 
 def _on_cooldown(provider_id):
@@ -443,8 +386,8 @@ def _set_cooldown(provider_id, retry_after):
     _state['cooldowns'][provider_id] = time.time() + _retry_after_seconds(retry_after)
 
 
-def _candidate_order():
-    selection = _selection()
+def _candidate_order(valves):
+    selection = _selection(valves)
     if selection == 'random':
         order = list(PROVIDERS)
         random.shuffle(order)
@@ -458,28 +401,28 @@ def _candidate_order():
     return []
 
 
-def _timeout_seconds():
+def _timeout_seconds(valves):
     try:
-        return float(_valve('TIMEOUT_SECONDS', 25) or 25)
+        return float(_valve(valves, 'TIMEOUT_SECONDS', 25) or 25)
     except (TypeError, ValueError):
         return 25.0
 
 
-def _num_results():
+def _num_results(valves):
     try:
-        return max(1, int(_valve('NUM_RESULTS', 8) or 8))
+        return max(1, int(_valve(valves, 'NUM_RESULTS', 8) or 8))
     except (TypeError, ValueError):
         return 8
 
 
-async def _run_search(query):
+async def _run_search(valves, query):
     """Search via the selected provider(s). Returns (results, provider_id)."""
-    selection = _selection()
-    order = _candidate_order()
+    selection = _selection(valves)
+    order = _candidate_order(valves)
     if not order:
         raise ProviderError(f'Web search is disabled or has no providers (SELECTION={selection!r})')
 
-    user_agent = _valve('USER_AGENT', DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT
+    user_agent = _valve(valves, 'USER_AGENT', DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT
     failures = []
     for provider_id in order:
         # Skip a cooling-down provider only while another provider is available.
@@ -488,14 +431,14 @@ async def _run_search(query):
         ):
             continue
         spec = PROVIDERS[provider_id]
-        key = _api_key(spec['env'])
+        key = _api_key(valves, spec['env'])
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(_timeout_seconds(), connect=10),
+                timeout=httpx.Timeout(_timeout_seconds(valves), connect=10),
                 headers={'User-Agent': user_agent},
                 follow_redirects=False,
             ) as client:
-                results = await spec['search'](client, query, _num_results(), key)
+                results = await spec['search'](client, query, _num_results(valves), key)
             if selection == 'random':
                 _state['sticky'] = provider_id
             return results, provider_id
@@ -690,8 +633,8 @@ def _decode_response(resp, url):
     raise FetchError(f'Unsupported content type: {content_type or "unknown"}')
 
 
-def _finalize(title, body):
-    max_length = _valve('MAX_CONTENT_LENGTH', 15000)
+def _finalize(valves, title, body):
+    max_length = _valve(valves, 'MAX_CONTENT_LENGTH', 15000)
     try:
         max_length = int(max_length) if max_length is not None else 0
     except (TypeError, ValueError):
@@ -703,11 +646,11 @@ def _finalize(title, body):
     return body
 
 
-async def _fetch_url(url):
-    user_agent = _valve('USER_AGENT', DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT
+async def _fetch_url(valves, url):
+    user_agent = _valve(valves, 'USER_AGENT', DEFAULT_USER_AGENT) or DEFAULT_USER_AGENT
     headers = {'User-Agent': user_agent, 'Accept': 'text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1'}
     current = url
-    async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout_seconds(), connect=10), follow_redirects=False) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_timeout_seconds(valves), connect=10), follow_redirects=False) as client:
         for _ in range(MAX_REDIRECTS):
             await asyncio.to_thread(_validate_url, current)
             resp = await client.get(current, headers=headers)
@@ -722,7 +665,7 @@ async def _fetch_url(url):
             if len(resp.content) > MAX_FETCH_BYTES:
                 raise FetchError('Response too large')
             title, body = _decode_response(resp, current)
-            return _finalize(title, body)
+            return _finalize(valves, title, body)
     raise FetchError('Too many redirects')
 
 
@@ -732,6 +675,67 @@ async def _fetch_url(url):
 
 
 class Tools:
+    # Nested per the Open WebUI v0.13.x convention: the app resolves the
+    # Valves class and the valves instance off the Tools instance
+    # (instance.Valves(**saved) at load, instance.Valves.schema() for the
+    # valves form).
+    class Valves(BaseModel):
+        # Provider selection: 'random' (default), a provider id ('exa', 'tavily',
+        # 'firecrawl', 'parallel', 'tinyfish'), or 'disabled'.
+        SELECTION: str = Field(
+            default='random',
+            description="Provider: 'random' (sticky selection with failover), a provider id, or 'disabled'.",
+            json_schema_extra={
+                'input': {
+                    'type': 'select',
+                    'options': ['random', 'exa', 'tavily', 'firecrawl', 'parallel', 'tinyfish', 'disabled'],
+                }
+            },
+        )
+        # Results per provider call (OpenCode uses 8).
+        NUM_RESULTS: int = Field(default=8, description='Results per provider call.')
+        # Seconds per provider request.
+        TIMEOUT_SECONDS: int = Field(default=25, description='Seconds per provider request.')
+        # fetch_url: truncate extracted text beyond this many characters (0 = no limit).
+        MAX_CONTENT_LENGTH: int = Field(
+            default=15000,
+            description='fetch_url: truncate extracted text beyond this many characters (0 = no limit).',
+        )
+        # User-Agent header for all requests.
+        USER_AGENT: str = Field(default=DEFAULT_USER_AGENT, description='User-Agent header for all requests.')
+        # Provider API keys. All optional: every provider works keyless (anonymous),
+        # exactly like OpenCode. A key here takes precedence over the environment
+        # variable of the same name.
+        EXA_API_KEY: str = Field(
+            default='',
+            description='Exa API key. Empty = keyless (anonymous) request.',
+            json_schema_extra={'input': {'type': 'password'}},
+        )
+        TAVILY_API_KEY: str = Field(
+            default='',
+            description='Tavily API key. Empty = keyless (anonymous) request.',
+            json_schema_extra={'input': {'type': 'password'}},
+        )
+        FIRECRAWL_API_KEY: str = Field(
+            default='',
+            description='Firecrawl API key. Empty = keyless (anonymous) request.',
+            json_schema_extra={'input': {'type': 'password'}},
+        )
+        PARALLEL_API_KEY: str = Field(
+            default='',
+            description='Parallel API key. Empty = keyless (anonymous) request.',
+            json_schema_extra={'input': {'type': 'password'}},
+        )
+        TINYFISH_API_KEY: str = Field(
+            default='',
+            description='TinyFish API key. Empty = keyless (anonymous) request.',
+            json_schema_extra={'input': {'type': 'password'}},
+        )
+
+    def __init__(self):
+        # The app replaces this with Valves(**saved) at tool load time.
+        self.valves = self.Valves()
+
     async def web_search(self, query: str) -> str:
         """
         Search the web using the user's selected search integration. Use this for current
@@ -741,7 +745,7 @@ class Tools:
         :return: Markdown sections with title, URL, publication date and page content for each result.
         """
         try:
-            results, _provider = await _run_search(query)
+            results, _provider = await _run_search(self.valves, query)
         except ProviderError as e:
             if e.status_code == 429:
                 return 'Web search rate limited (HTTP 429)'
@@ -760,7 +764,7 @@ class Tools:
         :return: The page content as markdown, with the page title as the first heading
         """
         try:
-            return await _fetch_url(url)
+            return await _fetch_url(self.valves, url)
         except FetchError as e:
             return json.dumps({'error': str(e)})
         except Exception as e:

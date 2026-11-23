@@ -1,14 +1,14 @@
-from conftest import set_valves, websearch
+from conftest import load_tool, websearch
 from fake_http import FakeClientFactory, FakeResponse
 import asyncio
 
 
 def fetch(url, responses, **valves):
     """Run Tools.fetch_url with a fake httpx client; returns (output, factory)."""
-    set_valves(**valves)
+    tool = load_tool(**valves)
     factory = FakeClientFactory(responses)
     websearch.httpx.AsyncClient = factory
-    output = asyncio.run(websearch.Tools().fetch_url(url))
+    output = asyncio.run(tool.fetch_url(url))
     return output, factory
 
 

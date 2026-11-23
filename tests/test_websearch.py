@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pytest
 
-from conftest import set_valves, websearch
+from conftest import load_tool, websearch
 from fake_http import FakeClientFactory, FakeResponse
 
 
@@ -54,12 +54,12 @@ TINYFISH_TEXT = json.dumps(
 
 
 def run_search(monkeypatch, responses, **valves):
-    set_valves(**valves)
+    tool = load_tool(**valves)
     factory = FakeClientFactory(responses)
     monkeypatch.setattr(websearch.httpx, 'AsyncClient', factory)
     import asyncio
 
-    output = asyncio.run(websearch.Tools().web_search('quantum error correction'))
+    output = asyncio.run(tool.web_search('quantum error correction'))
     return output, factory
 
 
@@ -184,17 +184,17 @@ def test_random_selection_is_sticky(monkeypatch):
     second = mcp_response(EXA_TEXT)
     output, factory = None, None
 
-    set_valves(SELECTION='random')
+    tool = load_tool(SELECTION='random')
     factory1 = FakeClientFactory([first])
     monkeypatch.setattr(websearch.httpx, 'AsyncClient', factory1)
     import asyncio
 
-    asyncio.run(websearch.Tools().web_search('q'))
+    asyncio.run(tool.web_search('q'))
     assert websearch._state['sticky'] == 'exa'  # first in deterministic order
 
     factory2 = FakeClientFactory([second])
     monkeypatch.setattr(websearch.httpx, 'AsyncClient', factory2)
-    asyncio.run(websearch.Tools().web_search('q'))
+    asyncio.run(tool.web_search('q'))
     assert factory2.clients[0].requests[0]['url'] == 'https://mcp.exa.ai/mcp'  # still sticky on exa
     assert websearch._state['sticky'] == 'exa'
 
@@ -318,7 +318,7 @@ def test_docstring_carries_current_year():
 
 
 def test_valves_schema_covers_all_valves_with_types_and_defaults():
-    schema = websearch.Valves.schema()
+    schema = websearch.Tools.Valves.schema()
     props = schema['properties']
     assert set(props) == {
         'SELECTION', 'NUM_RESULTS', 'TIMEOUT_SECONDS', 'MAX_CONTENT_LENGTH', 'USER_AGENT',
@@ -335,7 +335,7 @@ def test_valves_schema_covers_all_valves_with_types_and_defaults():
 
 
 def test_valves_schema_ui_conventions():
-    props = websearch.Valves.schema()['properties']
+    props = websearch.Tools.Valves.schema()['properties']
     # SELECTION renders as a dropdown with the provider choices
     assert props['SELECTION']['input'] == {
         'type': 'select',
@@ -347,11 +347,28 @@ def test_valves_schema_ui_conventions():
 
 
 def test_valves_construction_defaults_and_unknown_keys():
-    v = websearch.Valves()
+    v = websearch.Tools.Valves()
     assert v.SELECTION == 'random' and v.NUM_RESULTS == 8
     # The app loads valves as Valves(**saved); unknown stored keys must be
     # ignored (pydantic v2 extra='ignore' is the default)
-    v2 = websearch.Valves(**{'BOGUS_KEY': 1})
+    v2 = websearch.Tools.Valves(**{'BOGUS_KEY': 1})
     assert v2.SELECTION == 'random' and v2.NUM_RESULTS == 8
-    v3 = websearch.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': 3})
+    v3 = websearch.Tools.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': 3})
     assert v3.SELECTION == 'exa' and v3.NUM_RESULTS == 3
+
+
+def test_owui_v0134_load_wiring():
+    # v0.13.4 caches the Tools *instance* (load_tool_module_by_id returns
+    # module.Tools()), so Valves and the valves instance must be reachable
+    # off the instance:
+    tool = websearch.Tools()
+    assert hasattr(tool, 'valves') and hasattr(tool, 'Valves')
+    # utils/tools.py: instance.valves = instance.Valves(**saved)
+    tool.valves = tool.Valves(**{'SELECTION': 'exa', 'NUM_RESULTS': '3'})
+    assert tool.valves.SELECTION == 'exa' and tool.valves.NUM_RESULTS == 3
+    # routers/tools.py: schema = instance.Valves.schema()
+    schema = tool.Valves.schema()
+    assert set(schema['properties']) == {
+        'SELECTION', 'NUM_RESULTS', 'TIMEOUT_SECONDS', 'MAX_CONTENT_LENGTH', 'USER_AGENT',
+        'EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY', 'TINYFISH_API_KEY',
+    }
